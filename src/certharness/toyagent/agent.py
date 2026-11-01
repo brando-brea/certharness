@@ -13,9 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from certharness.config import AGENT_EFFORT, AGENT_MODEL
+from certharness.core.seeding import stable_seed
 from certharness.core.types import Provenance, Step, Task, ToolCall, Trajectory
 from certharness.llm.client import LLMClient
-from certharness.mutate.engine import stable_seed
 from certharness.toyagent.tools import TOOL_SPECS, World
 
 DEFAULT_MODEL = AGENT_MODEL

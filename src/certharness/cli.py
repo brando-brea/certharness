@@ -275,18 +275,23 @@ def mutate(
         list[str] | None, typer.Option(help="Restrict to these operators (repeatable).")
     ] = None,
     loader: Annotated[str, typer.Option(help="Trajectory loader for the input.")] = "jsonl",
+    replay: Annotated[
+        bool, typer.Option(help="Re-run mutated tool calls against the simulated world.")
+    ] = True,
 ) -> None:
     """Plant one seeded fault per (trajectory, operator) pair."""
     for name in operator or []:
         if name not in OPERATORS:
             raise typer.BadParameter(f"unknown operator {name!r}; available: {sorted(OPERATORS)}")
     trajs = get_loader(loader)(originals)
-    mutants = mutate_all(trajs, seed=seed, operators=operator)
+    mutants = mutate_all(trajs, seed=seed, operators=operator, replay=replay)
     write_jsonl(mutants, out)
     by_op: dict[str, int] = {}
     for m in mutants:
         by_op[m.mutation.operator] = by_op.get(m.mutation.operator, 0) + 1
-    typer.echo(f"wrote {len(mutants)} mutants from {len(trajs)} trajectories -> {out}")
+    n_replayed = sum(m.mutation.replayed for m in mutants)
+    typer.echo(f"wrote {len(mutants)} mutants from {len(trajs)} trajectories -> {out}"
+               f" ({n_replayed} replayed against the simulated world)")  # fmt: skip
     for name, k in sorted(by_op.items()):
         typer.echo(f"  {name:<20} {k}")
 
@@ -356,6 +361,47 @@ def certify_cmd(
                    judge_model=judge_model if "llm_judge" in (grader or []) else None,
                    reportable=reports[0].reportable)  # fmt: skip
         typer.echo(f"\nreports -> {out_dir}")
+
+
+@app.command()
+def grade(
+    trajectories: Annotated[Path, typer.Argument(help="Trajectories to grade.")],
+    out: Annotated[Path, typer.Option(help="Output JSONL of verdicts.")],
+    grader: Annotated[list[str] | None, typer.Option(help="Grader(s) (repeatable).")] = None,
+    judge_model: Annotated[str, typer.Option(help="Model for --grader llm_judge.")] = (
+        DEFAULT_JUDGE_MODEL
+    ),
+    workers: int = 8,
+    budget_usd: BudgetUSD = 20.0,
+    ledger: Ledger = Path("runs/ledger.jsonl"),
+    cache_dir: CacheDir = Path("runs/cache"),
+    freeze_tag: FreezeTag = config.FREEZE_TAG,
+) -> None:
+    """Run graders over trajectories and write verdicts (no labels, no certification)."""
+    trajs = get_loader("jsonl")(trajectories)
+    real = any(t.provenance in REPORTABLE_TRAJECTORIES for t in trajs)
+    freeze = _frozen(freeze_tag) if real else None
+    names = grader or sorted(GRADERS)
+    verdicts = []
+    for g in names:
+        if g == "llm_judge":
+            judge = LLMJudge(_client(budget_usd, ledger, cache_dir), judge_model)
+            try:
+                judge.prefetch(trajs, workers)
+            except BudgetExceeded as e:
+                typer.secho(f"ABORTED: {e}", fg="red", bold=True)
+                raise typer.Exit(2) from e
+            impl = judge
+        else:
+            impl = get_grader(g)
+        vs = [impl.grade(t.blinded()) for t in trajs]
+        verdicts += vs
+        typer.echo(f"{impl.name}: passed {sum(v.passed for v in vs)}/{len(vs)}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("".join(v.model_dump_json() + "\n" for v in verdicts))
+    write_meta(out.with_suffix(".meta.json"), freeze, command="grade", graders=names,
+               trajectories=str(trajectories), judge_model=judge_model)  # fmt: skip
+    typer.echo(f"verdicts -> {out}")
 
 
 @app.command("list")

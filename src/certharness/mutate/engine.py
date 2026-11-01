@@ -4,27 +4,30 @@ import hashlib
 import random
 from collections.abc import Iterable
 
+from certharness.core.seeding import stable_seed
 from certharness.core.types import Mutation, Trajectory
 from certharness.mutate.operators import OPERATORS
+from certharness.mutate.replay import can_replay
+from certharness.mutate.replay import replay as replay_traj
 
 
-def stable_seed(*parts: object) -> int:
-    """Process-independent seed (Python's hash() is salted per process)."""
-    digest = hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()
-    return int(digest[:8], 16)
-
-
-def mutant_id(parent_id: str, operator: str, seed: int) -> str:
+def mutant_id(parent_id: str, operator: str, seed: int, replayed: bool = False) -> str:
     """Opaque id, so neither the operator nor the parent leaks to a grader via the id."""
-    return "m-" + hashlib.sha256(f"{parent_id}|{operator}|{seed}".encode()).hexdigest()[:12]
+    key = f"{parent_id}|{operator}|{seed}" + ("|replay" if replayed else "")
+    return "m-" + hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
 def mutate_all(
-    trajs: Iterable[Trajectory], seed: int = 0, operators: Iterable[str] | None = None
+    trajs: Iterable[Trajectory],
+    seed: int = 0,
+    operators: Iterable[str] | None = None,
+    replay: bool = False,
 ) -> list[Trajectory]:
     """Apply every operator to every trajectory, at most one mutant per pair.
 
-    Deterministic: the same inputs and seed always produce identical mutants.
+    With replay=True, each mutant's tool calls are re-executed against the task's
+    simulated world (when it has one), so the planted fault changes downstream tool
+    results instead of only the transcript text. Deterministic for a given seed.
     """
     ops = [OPERATORS[name] for name in (operators or OPERATORS)]
     out: list[Trajectory] = []
@@ -36,22 +39,24 @@ def mutate_all(
             applied = op.apply(parent, random.Random(op_seed))
             if applied is None:
                 continue
-            if [s.model_dump() for s in applied.traj.steps] == [
-                s.model_dump() for s in parent.steps
-            ]:
+            mutated, replayed = applied.traj, False
+            if replay and can_replay(mutated):
+                mutated, replayed = replay_traj(mutated, applied.pinned), True
+            if [s.model_dump() for s in mutated.steps] == [s.model_dump() for s in parent.steps]:
                 continue  # equivalent mutant: nothing changed
             out.append(
-                applied.traj.model_copy(
+                mutated.model_copy(
                     update={
-                        "id": mutant_id(parent.id, op.name, seed),
+                        "id": mutant_id(parent.id, op.name, seed, replayed),
                         "mutation": Mutation(
                             operator=op.name,
                             severity=op.severity,
-                            tier=op.tier,
+                            tier=applied.tier or op.tier,
                             parent_id=parent.id,
                             seed=op_seed,
                             step_index=applied.step_index,
                             detail=applied.detail,
+                            replayed=replayed,
                         ),
                     }
                 )

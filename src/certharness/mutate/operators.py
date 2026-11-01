@@ -46,6 +46,8 @@ class Applied:
     traj: Trajectory
     step_index: int | None
     detail: str
+    tier: Literal["obvious", "subtle"] | None = None  # per-instance override of Operator.tier
+    pinned: frozenset[int] = frozenset()  # result steps replay must not recompute
 
 
 @dataclass(frozen=True)
@@ -287,9 +289,26 @@ def _false_success(t: Trajectory, rng: random.Random) -> Applied | None:
         return None
     res = rng.choice(results)
     msg = rng.choice(_ERRORS)
+    # Obvious only if the final answer reports something this result provided: then the
+    # reply visibly claims what a failed step never returned. An early lookup whose
+    # data later steps also carry makes the fault subtle (an unsupported value).
+    final = _final_index(t)
+    try:
+        facts = [str(v) for v in _scalars(json.loads(t.steps[res].content)) if is_fact(v)]
+    except json.JSONDecodeError:
+        facts = []
+    text = t.steps[final].content if final is not None else ""
+    feeds_final = any(len(f) >= 2 and _token(f).search(text) for f in facts)
     t.steps[res].is_error = True
     t.steps[res].content = json.dumps({"error": msg})
-    return Applied(t, res, f"tool result became error {msg!r}; final answer still claims success")
+    return Applied(
+        t,
+        res,
+        f"tool result became error {msg!r}; final answer still claims success"
+        + ("" if feeds_final else " (failed step does not feed the final answer)"),
+        tier="obvious" if feeds_final else "subtle",
+        pinned=frozenset({res}),
+    )
 
 
 def _hallucinate_result(t: Trajectory, rng: random.Random) -> Applied | None:

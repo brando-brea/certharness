@@ -83,3 +83,12 @@ def test_real_data_requires_freeze(tmp_path, monkeypatch):
     write_jsonl(trajs, src)
     r = runner.invoke(app, ["certify", "--originals", str(src), "--mutants", str(src)])
     assert r.exit_code == 3 and "REFUSED" in r.output
+
+
+def test_grade_writes_verdicts(tmp_path):
+    synth = tmp_path / "s.jsonl"
+    runner.invoke(app, ["synth", "--out", str(synth), "--n", "4"])
+    r = runner.invoke(app, ["grade", str(synth), "--out", str(tmp_path / "v.jsonl")])
+    assert r.exit_code == 0, r.output
+    assert "tool_sequence: passed 4/4" in r.output
+    assert len((tmp_path / "v.jsonl").read_text().splitlines()) == 8

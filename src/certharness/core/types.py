@@ -75,6 +75,7 @@ class Mutation(BaseModel):
     seed: int
     step_index: int | None = None
     detail: str = ""
+    replayed: bool = False  # tool results recomputed against the simulated world
 
 
 class Trajectory(BaseModel):
