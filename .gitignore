@@ -1,0 +1,26 @@
+# Secrets — never commit. This repo is public.
+.env
+.env.*
+*.pem
+*.p8
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Generated run artifacts (regenerate with the CLI; commit curated results explicitly)
+runs/
+data/generated/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
