@@ -176,6 +176,8 @@ def preflight(
     report(source is not None, f"API key available from {source or 'nowhere'} (value not shown)")
     if source not in (None, "env"):
         report(key_file_private(), f"key file {source} is owner-only (chmod 600)")
+        looks_ok = client_kwargs().get("api_key", "").startswith("sk-ant-api")
+        report(looks_ok, "key file holds an API key (sk-ant-api...)")
         git_ls = ["git", "-C", str(REPO_ROOT), "ls-files", "--error-unmatch", source]
         tracked = subprocess.run(git_ls, capture_output=True).returncode == 0
         report(not tracked, "key file is not tracked by git")

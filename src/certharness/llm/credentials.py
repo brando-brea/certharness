@@ -42,4 +42,12 @@ def client_kwargs() -> dict[str, str]:
         return {}
     if not key_file_private(path):
         raise PermissionError(f"{path} must be readable by its owner only (chmod 600)")
-    return {"api_key": path.read_text(encoding="utf-8").strip()}
+    return {"api_key": parse_key(path.read_text(encoding="utf-8"))}
+
+
+def parse_key(text: str) -> str:
+    """Accept a bare key or a dotenv-style line (ANTHROPIC_API_KEY=..., optionally quoted)."""
+    value = text.strip()
+    if "=" in value and not value.startswith("sk-"):
+        value = value.split("=", 1)[1].strip()
+    return value.strip("'\"")

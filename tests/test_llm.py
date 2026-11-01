@@ -171,3 +171,19 @@ def test_key_file_resolution(tmp_path, monkeypatch):
     assert credentials.key_source() == str(keyf)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
     assert credentials.client_kwargs() == {} and credentials.key_source() == "env"
+
+
+_KEY_FORMS = [
+    "sk-ant-api03-abc",
+    "sk-ant-api03-abc\n",
+    "ANTHROPIC_API_KEY=sk-ant-api03-abc",
+    'export ANTHROPIC_API_KEY="sk-ant-api03-abc"',
+    "ANTHROPIC_API_KEY='sk-ant-api03-abc'\n",
+]
+
+
+@pytest.mark.parametrize("text", _KEY_FORMS)
+def test_parse_key_accepts_dotenv_forms(text):
+    from certharness.llm.credentials import parse_key
+
+    assert parse_key(text) == "sk-ant-api03-abc"
