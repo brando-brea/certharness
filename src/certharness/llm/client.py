@@ -45,7 +45,9 @@ def request_key(params: dict[str, Any]) -> str:
 def anthropic_transport() -> Transport:
     import anthropic  # imported lazily so offline use and tests need no SDK client or key
 
-    client = anthropic.Anthropic(max_retries=4)
+    from certharness.llm.credentials import client_kwargs
+
+    client = anthropic.Anthropic(max_retries=4, **client_kwargs())
 
     def send(params: dict[str, Any]) -> dict[str, Any]:
         api = client.beta.messages if "betas" in params else client.messages

@@ -45,7 +45,8 @@ uv run certharness certify --originals runs/dev/synth.jsonl \
 ### Real agent runs and the LLM judge (calls the Claude API)
 
 ```bash
-export ANTHROPIC_API_KEY=...       # personal key, kept in your shell; never written to disk
+export ANTHROPIC_API_KEY=...       # or: key file at ~/.config/certharness/anthropic_api_key
+                                   # (chmod 600, outside the repo; used when the env var is unset)
 uv run certharness preflight       # key set, outputs git-ignored, no secrets on disk,
                                    # grader freeze intact, pinned model ids valid
 uv run certharness run-agent --out runs/m2/agent.jsonl

@@ -153,3 +153,21 @@ def test_split_params_against_installed_sdk():
     assert set(kwargs) - {"extra_body"} <= set(inspect.signature(create).parameters)
     flat = {k: v for k, v in kwargs.items() if k != "extra_body"} | kwargs.get("extra_body", {})
     assert flat == params  # nothing dropped or altered
+
+
+def test_key_file_resolution(tmp_path, monkeypatch):
+    from certharness.llm import credentials
+
+    keyf = tmp_path / "k"
+    monkeypatch.setenv("CERTHARNESS_KEY_FILE", str(keyf))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert credentials.key_source() is None and credentials.client_kwargs() == {}
+    keyf.write_text("sk-test\n")
+    keyf.chmod(0o644)
+    with pytest.raises(PermissionError, match="chmod 600"):
+        credentials.client_kwargs()
+    keyf.chmod(0o600)
+    assert credentials.client_kwargs() == {"api_key": "sk-test"}
+    assert credentials.key_source() == str(keyf)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
+    assert credentials.client_kwargs() == {} and credentials.key_source() == "env"

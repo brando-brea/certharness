@@ -159,7 +159,6 @@ def preflight(
 ) -> None:
     """Checks before a live run: key present, outputs git-ignored, no secrets on disk,
     grader freeze intact, pinned model ids valid (Models API; no token spend)."""
-    import os
     import subprocess
 
     from certharness.runmeta import REPO_ROOT
@@ -171,7 +170,15 @@ def preflight(
         failures += not ok
         typer.secho(f"  [{'ok' if ok else 'FAIL'}] {msg}", fg=None if ok else "red")
 
-    report(bool(os.environ.get("ANTHROPIC_API_KEY")), "ANTHROPIC_API_KEY is set (value not shown)")
+    from certharness.llm.credentials import client_kwargs, key_file_private, key_source
+
+    source = key_source()
+    report(source is not None, f"API key available from {source or 'nowhere'} (value not shown)")
+    if source not in (None, "env"):
+        report(key_file_private(), f"key file {source} is owner-only (chmod 600)")
+        git_ls = ["git", "-C", str(REPO_ROOT), "ls-files", "--error-unmatch", source]
+        tracked = subprocess.run(git_ls, capture_output=True).returncode == 0
+        report(not tracked, "key file is not tracked by git")
     for target in (cache_dir / "ab" / "x.json", ledger, Path("runs/m2/agent.meta.json")):
         ignored = subprocess.run(["git", "-C", str(REPO_ROOT), "check-ignore", "-q", str(target)])
         report(ignored.returncode == 0, f"{target} is git-ignored")
@@ -187,7 +194,7 @@ def preflight(
         try:
             import anthropic
 
-            client = anthropic.Anthropic()
+            client = anthropic.Anthropic(**client_kwargs())
             for model in (config.AGENT_MODEL, config.JUDGE_MODEL):
                 info = client.models.retrieve(model)
                 # An alias may resolve to a dated snapshot id (e.g. claude-haiku-4-5-2025...).
