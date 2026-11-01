@@ -2,7 +2,8 @@
 
 Manual agentic loop rather than the SDK tool runner, so that every request goes
 through certharness's budgeted, disk-cached client and every step is recorded.
-Produces Trajectories with provenance AGENT_RUN.
+Produces Trajectories with provenance AGENT_RUN. Single-model by design: no
+server-side fallbacks, so every trajectory comes from the pinned model.
 """
 
 from __future__ import annotations
@@ -11,13 +12,14 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from certharness.config import AGENT_EFFORT, AGENT_MODEL
 from certharness.core.types import Provenance, Step, Task, ToolCall, Trajectory
 from certharness.llm.client import LLMClient
 from certharness.mutate.engine import stable_seed
 from certharness.toyagent.tools import TOOL_SPECS, World
 
-DEFAULT_MODEL = "claude-opus-5"
-DEFAULT_EFFORT = "low"  # toy tasks; see README for the effort/cost rationale
+DEFAULT_MODEL = AGENT_MODEL
+DEFAULT_EFFORT = AGENT_EFFORT
 MAX_TURNS = 10
 
 SYSTEM = (
@@ -48,11 +50,6 @@ def _echo(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _fallback_used(response: dict[str, Any]) -> bool:
-    iterations = (response.get("usage") or {}).get("iterations") or []
-    return any(it.get("type") == "fallback_message" for it in iterations)
-
-
 def run_episode(
     client: LLMClient,
     task: Task,
@@ -66,8 +63,13 @@ def run_episode(
     tools = [{"name": t, **TOOL_SPECS[t]} for t in task.tools]
     messages: list[dict[str, Any]] = [{"role": "user", "content": task.instruction}]
     steps = [Step(role="user", content=task.instruction)]
-    meta: dict[str, Any] = {"model": model, "effort": effort,
-                            "injected_errors": transient_errors or []}  # fmt: skip
+    # tool_errors records every error result and whether it was injected or natural.
+    meta: dict[str, Any] = {
+        "model": model,
+        "effort": effort,
+        "injected_errors": transient_errors or [],
+        "tool_errors": [],
+    }
 
     for _ in range(MAX_TURNS):
         response = client.create(
@@ -79,11 +81,7 @@ def run_episode(
             messages=messages,
             output_config={"effort": effort},
             cache_control={"type": "ephemeral"},
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
         )
-        if _fallback_used(response):
-            meta["fallback_used"] = True
         content = response.get("content") or []
         text = "\n".join(b["text"] for b in content if b.get("type") == "text").strip()
         uses = [b for b in content if b.get("type") == "tool_use"]
@@ -107,6 +105,10 @@ def run_episode(
         results = []
         for u in uses:
             out, is_error = world.call(u["name"], u["input"])
+            if is_error:
+                meta["tool_errors"].append(
+                    {"step": len(steps), "tool": u["name"], "injected": world.last_injected}
+                )
             steps.append(Step(role="tool", tool_call_id=u["id"], content=out, is_error=is_error))
             results.append({"type": "tool_result", "tool_use_id": u["id"], "content": out,
                             **({"is_error": True} if is_error else {})})  # fmt: skip

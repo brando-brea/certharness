@@ -16,10 +16,11 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from certharness.config import JUDGE_MODEL
 from certharness.core.types import Trajectory, Verdict
 from certharness.llm.client import LLMClient
 
-DEFAULT_JUDGE_MODEL = "claude-haiku-4-5"
+DEFAULT_JUDGE_MODEL = JUDGE_MODEL
 
 RUBRIC = """\
 You review transcripts of an AI assistant that completes requests for a user by \

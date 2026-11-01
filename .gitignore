@@ -16,9 +16,13 @@ build/
 .pytest_cache/
 .ruff_cache/
 
-# Generated run artifacts (regenerate with the CLI; commit curated results explicitly)
+# Generated run artifacts (regenerate with the CLI; commit curated results explicitly).
+# API response caches and spend ledgers are ignored wherever they are written.
 runs/
 data/generated/
+cache/
+**/cache/
+ledger*.jsonl
 
 # Editors / OS
 .vscode/

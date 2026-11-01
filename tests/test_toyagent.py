@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from certharness.core.types import Provenance
 from certharness.graders import OutcomeGrader, ToolSequenceGrader
 from certharness.llm import Budget, LLMClient
@@ -90,7 +88,8 @@ def test_echoed_history_keeps_thinking_and_drops_extras(tmp_path):
     run_episode(client, ref.task, "run-y")
     assistant = [m for m in seen[-1]["messages"] if m["role"] == "assistant"][0]
     assert assistant["content"][0] == {"type": "thinking", "thinking": "", "signature": "sig"}
-    assert seen[0]["fallbacks"] == "default" and seen[0]["output_config"] == {"effort": "low"}
+    assert seen[0]["output_config"] == {"effort": "low"} and seen[0]["model"] == "claude-sonnet-5"
+    assert "fallbacks" not in seen[0] and "betas" not in seen[0]  # single-model runs
 
 
 def test_injected_error_is_deterministic_and_recorded(tmp_path):
@@ -123,19 +122,29 @@ def test_refusal_stops_episode(tmp_path):
     assert traj.task.metadata["agent"]["stop"] == "refusal" and traj.final_answer == ""
 
 
-@pytest.mark.parametrize(
-    "iterations,expected", [([{"type": "fallback_message"}], True), ([], None)]
-)
-def test_fallback_flag(tmp_path, iterations, expected):
-    ref = generate(1, seed=5)[0]
-    inner = _scripted(ref)
+def test_tool_errors_record_injected_vs_natural(tmp_path):
+    ref = next(t for t in generate(4, seed=8) if t.task.metadata["template"] == "weather")
+    calls = [c for _, c in ref.tool_calls()]
 
     def transport(params):
-        r = inner(params)
-        r["usage"]["iterations"] = iterations
-        return r
+        # turn 0: first call hits the injected 503 (whatever the args); turn 1: wrong
+        # city (natural error); turn 2: right call (succeeds); then answer.
+        turn = sum(1 for m in params["messages"] if m["role"] == "assistant")
+        usage = {"input_tokens": 100, "output_tokens": 10}
+        script = [calls[0].args, {**calls[0].args, "city": "Atlantis"}, calls[0].args]
+        if turn < 3:
+            use = {
+                "type": "tool_use",
+                "id": f"t{turn}",
+                "name": "get_weather",
+                "input": script[turn],
+            }
+            return {"model": "m", "stop_reason": "tool_use", "usage": usage, "content": [use]}
+        return {"model": "m", "stop_reason": "end_turn", "usage": usage,
+                "content": [{"type": "text", "text": ref.final_answer}]}  # fmt: skip
 
-    traj = run_episode(
-        LLMClient(Budget(5.0, tmp_path / "l"), tmp_path / "c", transport), ref.task, "r"
-    )
-    assert traj.task.metadata["agent"].get("fallback_used") is expected
+    client = LLMClient(Budget(5.0, tmp_path / "l"), tmp_path / "c", transport)
+    traj = run_episode(client, ref.task, "r", transient_errors=["get_weather"])
+    errs = traj.task.metadata["agent"]["tool_errors"]
+    assert [e["injected"] for e in errs] == [True, False]
+    assert all(traj.steps[e["step"]].is_error for e in errs)

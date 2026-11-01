@@ -45,15 +45,18 @@ uv run certharness certify --originals runs/dev/synth.jsonl \
 ### Real agent runs and the LLM judge (calls the Claude API)
 
 ```bash
-export ANTHROPIC_API_KEY=...                      # personal key; never committed
-uv run certharness run-agent --out runs/m2/agent.jsonl --n 96 --error-rate 0.25
+export ANTHROPIC_API_KEY=...       # personal key, kept in your shell; never written to disk
+uv run certharness preflight       # key set, outputs git-ignored, no secrets on disk,
+                                   # grader freeze intact, pinned model ids valid
+uv run certharness run-agent --out runs/m2/agent.jsonl
 uv run certharness label-provisional runs/m2/agent.jsonl \
-    --labels-out runs/m2/labels_provisional.json --passing-out runs/m2/passing.jsonl
+    --labels-out runs/m2/labels_provisional.json \
+    --passing-out runs/m2/passing.jsonl --rejected-out runs/m2/natural_failures.jsonl
 uv run certharness mutate runs/m2/passing.jsonl --out runs/m2/mutants.jsonl
 uv run certharness certify --originals runs/m2/passing.jsonl --mutants runs/m2/mutants.jsonl \
     --labels runs/m2/labels_provisional.json \
     --grader tool_sequence --grader outcome --grader llm_judge --out-dir runs/m2
-uv run certharness spend                          # tokens, cache use, cost, latency
+uv run certharness spend           # tokens, cache use, cost, latency per purpose/model
 ```
 
 - **Hard spend cap.** Every API call first reserves its worst-case cost against
@@ -63,18 +66,51 @@ uv run certharness spend                          # tokens, cache use, cost, lat
 - **Everything is cached to disk** (`runs/cache/`), keyed by the full request. Reruns
   are free and reproduce the same results, even for models that can't be run
   deterministically.
-- **The toy agent** (`claude-opus-5`, effort `low`) works against a simulated
-  contacts/calendar/email/files/weather backend. `--error-rate` injects one transient
-  tool failure into that fraction of tasks, so real agent behaviour around errors
-  shows up in the data.
-- **The judge** (`claude-haiku-4-5` by default) sees only the instruction and a
-  transcript, never ids, the task spec, or mutation records. Its rubric is marked for
-  prompt caching, but Haiku 4.5 only caches prefixes of at least 4096 tokens and the
-  rubric is far shorter, so on Haiku it doesn't cache (Sonnet 5's minimum is 1024).
-  `certharness spend` shows the cache tokens actually read.
-- **Provisional labels** come from code-grader consensus and are tagged `stub`. They
-  only pick which agent runs get mutated, until human labels exist. They're circular
-  for the code graders and never reportable.
+- **No secrets on disk.** The API key stays inside the SDK client and never appears
+  in request params. Only a whitelist of response-body fields is cached (no headers),
+  and the ledger stores counts and costs. Caches and ledgers are git-ignored wherever
+  they're written. `preflight` checks all of this.
+- **Pinned models** live in `src/certharness/config.py`: the agent is
+  `claude-sonnet-5` at effort `low` and the judge is `claude-haiku-4-5`. `preflight`
+  confirms both ids against the Models API before any tokens are spent.
+- **The toy agent** works against a simulated contacts/calendar/email/files/weather
+  backend. Runs are single-model, with no server-side fallbacks. `--error-rate`
+  (default 0.25) injects one transient tool failure into that fraction of tasks. Every
+  error result is recorded per trajectory as `injected` or `natural`.
+- **The judge** sees only the instruction and a transcript, never ids, the task spec,
+  or mutation records.
+- **Provisional labels** come from code-grader consensus and are tagged `stub`.
+  Passing runs become mutation parents. Rejected runs are kept, never mutated, as
+  *natural failures* for human labeling (RQ1). The labels are circular for the code
+  graders and never reportable.
+- **Run metadata.** Every live command writes a `*.meta.json` / `run_meta.json`
+  recording the freeze tag and commit, model ids, prices date, SDK version, settings,
+  and spend.
+
+## Grader freeze
+
+Graders, the LLM-judge rubric, task expected answers and certification gates are
+frozen at the git tag **`graders-v0.1-frozen`** (paths listed in
+`src/certharness/config.py`). Any command that touches real agent or benchmark data
+refuses to run if those paths differ from the tag, whether through committed or
+uncommitted edits. Changing them needs a new tag and a note under threats to validity.
+
+**Pre-freeze tuning, made before any agent data existed:** two task expected-answer
+patterns were loosened after looking at synthetic data, because they rejected
+harmless formatting. `weather` accepts `14 °C` / `14 degrees`, not only `14°C`.
+`next_meeting` requires the date and time to appear anywhere in the reply, not as the
+literal phrase "DATE at TIME". The agent's system prompt also asks for ISO dates,
+24-hour times and returned ids, as a product spec. The judge rubric was written once,
+before the freeze, without seeing any agent output.
+
+## Research notes
+
+- **RQ4: judge caching depends on model.** The judge rubric is marked for prompt
+  caching, but `claude-haiku-4-5` only caches prefixes of at least 4096 tokens, and
+  the rubric is far shorter, so on Haiku it never caches. `claude-sonnet-5` caches
+  from 1024 tokens. Haiku without caching is still cheaper per verdict than Sonnet
+  with caching, so cost per certified verdict has to be measured, not assumed from
+  cache hit rates. `certharness spend` records the actual cache reads.
 
 ## Layout
 
@@ -110,6 +146,9 @@ benchmark's native format into `Trajectory` objects with `provenance="external"`
 - **Single rater:** labels come from one person. Intra-rater agreement across two
   blind sessions is reported as a limitation.
 - **Toy domain:** the development domain is small. v0.2 adds an external benchmark.
+- **Pre-freeze tuning:** see [Grader freeze](#grader-freeze). Expected-answer patterns
+  were adjusted on synthetic data before freezing. No changes after the freeze go
+  untagged.
 - **Same-family judging:** a Claude judge grading a Claude agent may share its blind
   spots. A cross-family judge is a planned comparison.
 - **Judge–operator leakage:** the judge rubric describes task success in general terms

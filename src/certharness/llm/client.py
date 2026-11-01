@@ -4,6 +4,10 @@ Every request is keyed by a hash of its full parameters. A cache hit returns the
 stored response at zero cost, so reruns are free and results reproducible even for
 models that cannot be run deterministically. Every call, live or cached, is logged to
 the budget ledger with tokens, cost and latency.
+
+Neither the cache nor the ledger stores credentials or HTTP headers: the API key
+lives only inside the SDK client, request params never contain it, and only a
+whitelist of response-body fields is written to disk.
 """
 
 from __future__ import annotations
@@ -22,6 +26,12 @@ from certharness.llm.budget import Budget
 from certharness.llm.pricing import PRICES, cost_usd, rates, worst_case_usd
 
 Transport = Callable[[dict[str, Any]], dict[str, Any]]
+
+# Response-body fields written to the disk cache; anything else is dropped.
+STORED_RESPONSE_FIELDS = (
+    "id", "type", "role", "model", "content", "stop_reason", "stop_sequence", "stop_details",
+    "usage",
+)  # fmt: skip
 
 # Conservative chars-per-token for the pre-call worst-case estimate.
 _CHARS_PER_TOKEN = 2.5
@@ -55,7 +65,7 @@ class LLMClient:
         key = request_key(params)
         path = self.cache_dir / key[:2] / f"{key}.json"
         entry = {"ts": datetime.now(UTC).isoformat(), "purpose": purpose, "model": model,
-                 "key": key}  # fmt: skip
+                 "request_hash": key}  # fmt: skip
 
         if path.exists():
             stored = json.loads(path.read_text(encoding="utf-8"))
@@ -69,7 +79,8 @@ class LLMClient:
         try:
             if self._transport is None:
                 self._transport = anthropic_transport()
-            response = self._transport(params)
+            raw = self._transport(params)
+            response = {k: raw[k] for k in STORED_RESPONSE_FIELDS if k in raw}
         except BaseException:
             self.budget.release(reserved)
             raise

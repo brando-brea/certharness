@@ -109,11 +109,14 @@ class World:
     def __init__(self, spec: dict[str, Any]):
         self.spec = copy.deepcopy(spec)
         self._failed_once: set[str] = set()
+        self.last_injected = False  # whether the most recent call's error was injected
 
     def call(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Run a tool. Returns (JSON content, is_error)."""
+        self.last_injected = False
         if name in self.spec.get("transient_errors", []) and name not in self._failed_once:
             self._failed_once.add(name)
+            self.last_injected = True
             return _err(TRANSIENT_ERROR)
         handler = getattr(self, f"_{name}", None)
         if handler is None or name not in TOOL_SPECS:

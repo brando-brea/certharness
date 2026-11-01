@@ -104,3 +104,19 @@ def test_fallback_priced_at_higher_rate(tmp_path):
     assert budget.spent_usd == pytest.approx(cost_usd("claude-opus-5", _resp()["usage"]))
     entry = json.loads((tmp_path / "ledger.jsonl").read_text())
     assert entry["served_model"] == "claude-opus-5"
+
+
+def test_cache_and_ledger_store_no_headers_or_secrets(tmp_path):
+    def transport(params):
+        r = _resp()
+        r["headers"] = {"x-api-key": "sk-ant-SECRET", "authorization": "Bearer SECRET"}
+        r["_request_id"] = "req_123"
+        return r
+
+    client = LLMClient(Budget(1.0, tmp_path / "ledger.jsonl"), tmp_path / "cache", transport)
+    out = client.create("judge", model="claude-haiku-4-5", max_tokens=10, messages=[])
+    assert "headers" not in out and "_request_id" not in out
+    for f in [tmp_path / "ledger.jsonl", *(tmp_path / "cache").rglob("*.json")]:
+        text = f.read_text()
+        assert "SECRET" not in text and "sk-ant" not in text and "x-api-key" not in text
+    assert "request_hash" in json.loads((tmp_path / "ledger.jsonl").read_text())
