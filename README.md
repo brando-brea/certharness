@@ -90,7 +90,7 @@ uv run certharness spend           # tokens, cache use, cost, latency per purpos
 ## Grader freeze
 
 Graders, the LLM-judge rubric, task expected answers and certification gates are
-frozen at the git tag **`graders-v0.1-frozen`** (paths listed in
+frozen at the git tag **`graders-v0.1-frozen`** (commit `a20be01eba`; paths listed in
 `src/certharness/config.py`). Any command that touches real agent or benchmark data
 refuses to run if those paths differ from the tag, whether through committed or
 uncommitted edits. Changing them needs a new tag and a note under threats to validity.
