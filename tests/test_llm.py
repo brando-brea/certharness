@@ -120,3 +120,36 @@ def test_cache_and_ledger_store_no_headers_or_secrets(tmp_path):
         text = f.read_text()
         assert "SECRET" not in text and "sk-ant" not in text and "x-api-key" not in text
     assert "request_hash" in json.loads((tmp_path / "ledger.jsonl").read_text())
+
+
+def test_split_params_routes_unknown_fields_to_extra_body():
+    from certharness.llm.client import split_params
+
+    def create(*, model, max_tokens, messages, extra_body=None):  # SDK-like signature
+        pass
+
+    out = split_params(create, {"model": "m", "max_tokens": 5, "messages": [], "temperature": 0.0})
+    assert out == {
+        "model": "m",
+        "max_tokens": 5,
+        "messages": [],
+        "extra_body": {"temperature": 0.0},
+    }
+    assert "extra_body" not in split_params(create, {"model": "m", "max_tokens": 5, "messages": []})
+
+
+def test_split_params_against_installed_sdk():
+    import anthropic
+
+    from certharness.graders.llm_judge import LLMJudge
+    from certharness.llm.client import split_params
+    from certharness.synthetic import generate
+
+    create = anthropic.Anthropic(api_key="x").messages.create
+    params = LLMJudge(client=None).request(generate(1)[0])
+    kwargs = split_params(create, params)
+    import inspect
+
+    assert set(kwargs) - {"extra_body"} <= set(inspect.signature(create).parameters)
+    flat = {k: v for k, v in kwargs.items() if k != "extra_body"} | kwargs.get("extra_body", {})
+    assert flat == params  # nothing dropped or altered

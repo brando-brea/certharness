@@ -13,6 +13,7 @@ whitelist of response-body fields is written to disk.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import threading
@@ -48,9 +49,20 @@ def anthropic_transport() -> Transport:
 
     def send(params: dict[str, Any]) -> dict[str, Any]:
         api = client.beta.messages if "betas" in params else client.messages
-        return api.create(**params).to_dict()
+        return api.create(**split_params(api.create, params)).to_dict()
 
     return send
+
+
+def split_params(create: Callable[..., Any], params: dict[str, Any]) -> dict[str, Any]:
+    """Pass API fields the installed SDK has no named argument for (e.g. `temperature`
+    in anthropic 2.x) through `extra_body`, so the wire request is unchanged."""
+    accepted = inspect.signature(create).parameters
+    kwargs = {k: v for k, v in params.items() if k in accepted}
+    extra = {k: v for k, v in params.items() if k not in accepted}
+    if extra:
+        kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra}
+    return kwargs
 
 
 class LLMClient:
