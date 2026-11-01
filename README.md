@@ -99,7 +99,7 @@ and an entry in the log below.
 | Tag | What changed | Data affected |
 |---|---|---|
 | `graders-v0.1-frozen` (`a20be01`) | Initial freeze | — |
-| `graders-v0.1.1-frozen` | Removed `temperature=0` from the judge request. The API rejects sampling parameters for `claude-haiku-4-5` ("Extra inputs are not permitted"). | None. Made before any judge verdict existed. Code graders are byte-identical to v0.1, so the agent run, provisional labels and mutants made under v0.1 stay valid. |
+| `graders-v0.1.1-frozen` (`a1dfe79`) | Removed `temperature=0` from the judge request. The API rejects sampling parameters for `claude-haiku-4-5` ("Extra inputs are not permitted"). | None. Made before any judge verdict existed. Code graders are byte-identical to v0.1, so the agent run, provisional labels and mutants made under v0.1 stay valid. |
 
 **Pre-freeze tuning, made before any agent data existed:** two task expected-answer
 patterns were loosened after looking at synthetic data, because they rejected
