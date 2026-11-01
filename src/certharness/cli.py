@@ -156,6 +156,14 @@ def preflight(
     cache_dir: CacheDir = Path("runs/cache"),
     freeze_tag: FreezeTag = config.FREEZE_TAG,
     check_models: Annotated[bool, typer.Option(help="Verify pinned model ids live.")] = True,
+    smoke: Annotated[
+        bool,
+        typer.Option(
+            help="Send one real agent and one real judge request (max_tokens=16) "
+            "to validate the exact request shapes. Costs a fraction of a cent."
+        ),
+    ] = False,
+    budget_usd: BudgetUSD = 20.0,
 ) -> None:
     """Checks before a live run: key present, outputs git-ignored, no secrets on disk,
     grader freeze intact, pinned model ids valid (Models API; no token spend)."""
@@ -205,6 +213,23 @@ def preflight(
                 report(resolved, f"model {shown} exists ({info.display_name})")
         except Exception as e:  # noqa: BLE001 - surface any failure as a failed check
             report(False, f"model check failed: {type(e).__name__}: {e}")
+    if smoke:
+        from certharness.toyagent.agent import agent_request, tools_for
+
+        client = LLMClient(Budget(budget_usd, ledger), cache_dir)
+        sample = generate(1, seed=0)[0]
+        msgs = [{"role": "user", "content": sample.task.instruction}]
+        tools = tools_for(sample.task)
+        requests = {
+            "agent": agent_request(config.AGENT_MODEL, config.AGENT_EFFORT, tools, msgs),
+            "judge": LLMJudge(client, config.JUDGE_MODEL).request(sample),
+        }
+        for purpose, params in requests.items():
+            try:
+                r = client.create(f"smoke-{purpose}", **{**params, "max_tokens": 16})
+                report(True, f"smoke {purpose} request accepted ({r.get('stop_reason')})")
+            except Exception as e:  # noqa: BLE001 - surface any failure as a failed check
+                report(False, f"smoke {purpose} request rejected: {type(e).__name__}: {e}")
     if failures:
         typer.secho(f"{failures} check(s) failed", fg="red", bold=True)
         raise typer.Exit(1)

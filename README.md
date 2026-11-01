@@ -47,8 +47,8 @@ uv run certharness certify --originals runs/dev/synth.jsonl \
 ```bash
 export ANTHROPIC_API_KEY=...       # or: key file at ~/.config/certharness/anthropic_api_key
                                    # (chmod 600, outside the repo; used when the env var is unset)
-uv run certharness preflight       # key set, outputs git-ignored, no secrets on disk,
-                                   # grader freeze intact, pinned model ids valid
+uv run certharness preflight --smoke   # key, git-ignores, no secrets on disk, freeze,
+                                       # model ids, and one tiny real request per role
 uv run certharness run-agent --out runs/m2/agent.jsonl
 uv run certharness label-provisional runs/m2/agent.jsonl \
     --labels-out runs/m2/labels_provisional.json \
@@ -90,11 +90,16 @@ uv run certharness spend           # tokens, cache use, cost, latency per purpos
 
 ## Grader freeze
 
-Graders, the LLM-judge rubric, task expected answers and certification gates are
-frozen at the git tag **`graders-v0.1-frozen`** (commit `a20be01eba`; paths listed in
-`src/certharness/config.py`). Any command that touches real agent or benchmark data
-refuses to run if those paths differ from the tag, whether through committed or
-uncommitted edits. Changing them needs a new tag and a note under threats to validity.
+Graders, the LLM-judge rubric and request, task expected answers and certification
+gates are frozen at a git tag (paths listed in `src/certharness/config.py`). Any command
+that touches real agent or benchmark data refuses to run if those paths differ from the
+current tag, whether through committed or uncommitted edits. A change needs a new tag
+and an entry in the log below.
+
+| Tag | What changed | Data affected |
+|---|---|---|
+| `graders-v0.1-frozen` (`a20be01`) | Initial freeze | — |
+| `graders-v0.1.1-frozen` | Removed `temperature=0` from the judge request. The API rejects sampling parameters for `claude-haiku-4-5` ("Extra inputs are not permitted"). | None. Made before any judge verdict existed. Code graders are byte-identical to v0.1, so the agent run, provisional labels and mutants made under v0.1 stay valid. |
 
 **Pre-freeze tuning, made before any agent data existed:** two task expected-answer
 patterns were loosened after looking at synthetic data, because they rejected
@@ -150,6 +155,11 @@ benchmark's native format into `Trajectory` objects with `provenance="external"`
 - **Pre-freeze tuning:** see [Grader freeze](#grader-freeze). Expected-answer patterns
   were adjusted on synthetic data before freezing. No changes after the freeze go
   untagged.
+- **Judge verdicts are sampled, not greedy (post-freeze change 1, v0.1.1).** The judge
+  model doesn't accept `temperature`, so each verdict is one sample from its default
+  distribution. Results are reproducible because verdicts are cached, but a re-run
+  without the cache could flip borderline verdicts. Verdict stability will be measured
+  by re-grading a sample with the cache bypassed.
 - **Same-family judging:** a Claude judge grading a Claude agent may share its blind
   spots. A cross-family judge is a planned comparison.
 - **Judge–operator leakage:** the judge rubric describes task success in general terms

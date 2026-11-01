@@ -13,7 +13,7 @@ MODEL_IDS_AS_OF = "2026-06-24"
 # Grader freeze: runs on real (agent/external) data refuse to start unless these paths
 # are identical to FREEZE_TAG. Changing them requires a new tag and a threats-to-validity
 # note in the README.
-FREEZE_TAG = "graders-v0.1-frozen"
+FREEZE_TAG = "graders-v0.1.1-frozen"  # v0.1.1: judge request without temperature
 FROZEN_PATHS = (
     "src/certharness/graders",  # code graders and the LLM-judge rubric
     "src/certharness/synthetic.py",  # task specs, including expected answers

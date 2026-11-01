@@ -98,7 +98,6 @@ class LLMJudge:
         return {
             "model": self.model,
             "max_tokens": 1024,
-            "temperature": 0.0,
             "system": [{"type": "text", "text": RUBRIC, "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": user}],
             "output_config": {"format": {"type": "json_schema", "schema": SCHEMA}},

@@ -50,3 +50,9 @@ def test_judge_rejects_truncated_output(tmp_path):
     judge = _judge(tmp_path, lambda body: True, stop="max_tokens")
     with pytest.raises(JudgeError, match="max_tokens"):
         judge.grade(generate(1)[0])
+
+
+def test_judge_request_has_no_sampling_params():
+    # claude-haiku-4-5 rejects temperature ("Extra inputs are not permitted"); see v0.1.1 note.
+    params = LLMJudge(client=None).request(generate(1)[0])
+    assert not {"temperature", "top_p", "top_k"} & set(params)

@@ -50,6 +50,23 @@ def _echo(content: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def agent_request(model: str, effort: str, tools: list[dict], messages: list[dict]) -> dict:
+    """The exact Messages API request the agent sends each turn."""
+    return {
+        "model": model,
+        "max_tokens": 4096,
+        "system": SYSTEM,
+        "tools": tools,
+        "messages": messages,
+        "output_config": {"effort": effort},
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def tools_for(task: Task) -> list[dict[str, Any]]:
+    return [{"name": t, **TOOL_SPECS[t]} for t in task.tools]
+
+
 def run_episode(
     client: LLMClient,
     task: Task,
@@ -60,7 +77,7 @@ def run_episode(
 ) -> Trajectory:
     world_spec = {**task.metadata.get("world", {}), "transient_errors": transient_errors or []}
     world = World(world_spec)
-    tools = [{"name": t, **TOOL_SPECS[t]} for t in task.tools]
+    tools = tools_for(task)
     messages: list[dict[str, Any]] = [{"role": "user", "content": task.instruction}]
     steps = [Step(role="user", content=task.instruction)]
     # tool_errors records every error result and whether it was injected or natural.
@@ -72,16 +89,7 @@ def run_episode(
     }
 
     for _ in range(MAX_TURNS):
-        response = client.create(
-            "agent",
-            model=model,
-            max_tokens=4096,
-            system=SYSTEM,
-            tools=tools,
-            messages=messages,
-            output_config={"effort": effort},
-            cache_control={"type": "ephemeral"},
-        )
+        response = client.create("agent", **agent_request(model, effort, tools, messages))
         content = response.get("content") or []
         text = "\n".join(b["text"] for b in content if b.get("type") == "text").strip()
         uses = [b for b in content if b.get("type") == "tool_use"]
