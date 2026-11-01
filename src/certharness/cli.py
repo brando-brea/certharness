@@ -190,7 +190,10 @@ def preflight(
             client = anthropic.Anthropic()
             for model in (config.AGENT_MODEL, config.JUDGE_MODEL):
                 info = client.models.retrieve(model)
-                report(info.id == model, f"model {model} exists ({info.display_name})")
+                # An alias may resolve to a dated snapshot id (e.g. claude-haiku-4-5-2025...).
+                resolved = info.id == model or info.id.startswith(model + "-")
+                shown = model if info.id == model else f"{model} -> {info.id}"
+                report(resolved, f"model {shown} exists ({info.display_name})")
         except Exception as e:  # noqa: BLE001 - surface any failure as a failed check
             report(False, f"model check failed: {type(e).__name__}: {e}")
     if failures:
