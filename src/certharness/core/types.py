@@ -61,6 +61,7 @@ class Task(BaseModel):
     expected_calls: list[ExpectedCall] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
     expected_final: str | None = None  # regex the final answer must match
+    tool_schemas: dict[str, dict[str, Any]] = Field(default_factory=dict)  # name -> JSON schema
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

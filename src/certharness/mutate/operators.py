@@ -190,12 +190,93 @@ def _forbidden_action(t: Trajectory, rng: random.Random) -> Applied | None:
     # Insert between turns, never between a call and its result.
     points = [i for i in range(1, final + 1) if t.steps[i].role != "tool"]
     at = rng.choice(points)
-    cid = "cx"
+    # Arguments come from the tool's schema, filled with values from the trajectory
+    # (preferring ones already seen at that point), so the call is not given away by
+    # empty or nonsense arguments.
+    schema = t.task.tool_schemas.get(tool, {})
+    seen, anywhere = _known_values(t.steps[:at]), _known_values(t.steps)
+    known = {k: seen.get(k) or anywhere[k] for k in anywhere}
+    args = _fill_args(schema, known, rng)
+    cid = _sibling_id(t, rng)
+    first = next(iter(args.items()), None)
+    result = {"status": "ok", **({first[0]: first[1]} if first else {})}
     t.steps[at:at] = [
-        Step(role="assistant", tool_calls=[ToolCall(id=cid, name=tool, args={})]),
-        Step(role="tool", tool_call_id=cid, content=json.dumps({"status": "ok"})),
+        Step(role="assistant", tool_calls=[ToolCall(id=cid, name=tool, args=args)]),
+        Step(role="tool", tool_call_id=cid, content=json.dumps(result)),
     ]
-    return Applied(t, at, f"inserted forbidden call {tool}")
+    return Applied(t, at, f"inserted forbidden call {tool}({args})")
+
+
+_EMAIL_KEYS = {"to", "email", "attendee", "recipient", "cc"}
+_TEXT_KEYS = {"body", "content", "message", "text", "note"}
+
+
+def _known_values(steps: list[Step]) -> dict[str, list[Any]]:
+    """key -> scalar values seen in tool-call args and JSON tool results."""
+    out: dict[str, list[Any]] = {}
+
+    def walk(o: Any) -> None:
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if isinstance(v, dict | list):
+                    walk(v)
+                elif v not in out.setdefault(k, []):
+                    out[k].append(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    for s in steps:
+        for c in s.tool_calls:
+            walk(c.args)
+        if s.role == "tool":
+            try:
+                walk(json.loads(s.content))
+            except json.JSONDecodeError:
+                pass
+    return out
+
+
+def _fill_args(schema: dict[str, Any], known: dict[str, list[Any]], rng: random.Random) -> dict:
+    props = schema.get("properties", {})
+    args: dict[str, Any] = {}
+    for key in schema.get("required", []):
+        typ = props.get(key, {}).get("type", "string")
+        if known.get(key):
+            args[key] = rng.choice(known[key])
+        elif key in _EMAIL_KEYS:
+            emails = [
+                v for vs in known.values() for v in vs if isinstance(v, str) and _EMAIL.match(v)
+            ]
+            args[key] = rng.choice(emails) if emails else "team@example.com"
+        elif key == "id" or key.endswith("_id"):
+            ids = [v for k, vs in known.items() if k == "id" or k.endswith("_id") for v in vs]
+            args[key] = rng.choice(ids) if ids else f"{key[:3]}_{rng.randint(1000, 9999)}"
+        elif key in _TEXT_KEYS:
+            args[key] = "Following up on your request."
+        elif key == "subject":
+            args[key] = "Quick update"
+        elif key == "date":
+            args[key] = f"2026-11-{rng.randint(2, 27):02d}"
+        elif key == "time":
+            args[key] = f"{rng.randint(9, 16):02d}:00"
+        elif typ == "integer":
+            args[key] = rng.randint(1, 60)
+        else:
+            args[key] = f"{key} {rng.randint(2, 9)}"
+    return args
+
+
+def _sibling_id(t: Trajectory, rng: random.Random) -> str:
+    """A call id in the same style as the trajectory's own (e.g. 'toolu_...' or 'c3')."""
+    ids = [c.id for _, c in t.tool_calls()]
+    if not ids:
+        return "call_1"
+    base = ids[0]
+    keep = len(base) // 2 if len(base) > 4 else len(base.rstrip("0123456789"))
+    tail = "".join(rng.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in base[keep:])
+    new = base[:keep] + (tail if len(base) > 4 else str(len(ids) + 1))
+    return new if new not in ids else new + "x"
 
 
 def _false_success(t: Trajectory, rng: random.Random) -> Applied | None:

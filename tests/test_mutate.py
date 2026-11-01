@@ -97,3 +97,12 @@ def test_perturb_date_and_time_stay_valid():
 def test_is_fact():
     assert is_fact(3) and is_fact("evt_12") and is_fact("a@b.co")
     assert not is_fact("Gus Lindqvist") and not is_fact(True)
+
+
+def test_forbidden_calls_have_schema_valid_args(mutants):
+    for m in (m for m in mutants if m.mutation.operator == "forbidden_action"):
+        [call] = [c for _, c in m.tool_calls() if c.name in m.task.forbidden_tools]
+        schema = m.task.tool_schemas[call.name]
+        assert set(schema["required"]) <= set(call.args)
+        assert all(v not in ("", None) for v in call.args.values())
+        assert call.id != "cx"

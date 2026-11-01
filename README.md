@@ -42,6 +42,40 @@ uv run certharness certify --originals runs/dev/synth.jsonl \
 
 `certify` prints one report per grader plus an operator × grader catch-rate matrix.
 
+### Real agent runs and the LLM judge (calls the Claude API)
+
+```bash
+export ANTHROPIC_API_KEY=...                      # personal key; never committed
+uv run certharness run-agent --out runs/m2/agent.jsonl --n 96 --error-rate 0.25
+uv run certharness label-provisional runs/m2/agent.jsonl \
+    --labels-out runs/m2/labels_provisional.json --passing-out runs/m2/passing.jsonl
+uv run certharness mutate runs/m2/passing.jsonl --out runs/m2/mutants.jsonl
+uv run certharness certify --originals runs/m2/passing.jsonl --mutants runs/m2/mutants.jsonl \
+    --labels runs/m2/labels_provisional.json \
+    --grader tool_sequence --grader outcome --grader llm_judge --out-dir runs/m2
+uv run certharness spend                          # tokens, cache use, cost, latency
+```
+
+- **Hard spend cap.** Every API call first reserves its worst-case cost against
+  `--budget-usd` (default $20). If that would exceed the cap, the call is never sent
+  and the run aborts. The cap covers the whole ledger (`runs/ledger.jsonl`), not just
+  one process.
+- **Everything is cached to disk** (`runs/cache/`), keyed by the full request. Reruns
+  are free and reproduce the same results, even for models that can't be run
+  deterministically.
+- **The toy agent** (`claude-opus-5`, effort `low`) works against a simulated
+  contacts/calendar/email/files/weather backend. `--error-rate` injects one transient
+  tool failure into that fraction of tasks, so real agent behaviour around errors
+  shows up in the data.
+- **The judge** (`claude-haiku-4-5` by default) sees only the instruction and a
+  transcript, never ids, the task spec, or mutation records. Its rubric is marked for
+  prompt caching, but Haiku 4.5 only caches prefixes of at least 4096 tokens and the
+  rubric is far shorter, so on Haiku it doesn't cache (Sonnet 5's minimum is 1024).
+  `certharness spend` shows the cache tokens actually read.
+- **Provisional labels** come from code-grader consensus and are tagged `stub`. They
+  only pick which agent runs get mutated, until human labels exist. They're circular
+  for the code graders and never reportable.
+
 ## Layout
 
 ```
@@ -76,6 +110,14 @@ benchmark's native format into `Trajectory` objects with `provenance="external"`
 - **Single rater:** labels come from one person. Intra-rater agreement across two
   blind sessions is reported as a limitation.
 - **Toy domain:** the development domain is small. v0.2 adds an external benchmark.
+- **Same-family judging:** a Claude judge grading a Claude agent may share its blind
+  spots. A cross-family judge is a planned comparison.
+- **Judge–operator leakage:** the judge rubric describes task success in general terms
+  and isn't written around the mutation operators. Tuning it to the planted faults
+  would inflate catch rates. Changes to the rubric are tracked in git.
+- **Parent selection bias:** until human labels exist, the trajectories that get
+  mutated are the ones the code graders agree passed. That skews the parent set toward
+  trajectories code graders like.
 - **Point estimates overstate small samples (a preview of RQ3).** "0 misses out of 50"
   doesn't show a miss rate under 2%. So the critical-false-pass gate uses the one-sided
   95% Clopper–Pearson *upper bound*, which must be ≤ 2%. That bound is out of reach

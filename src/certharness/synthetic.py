@@ -3,6 +3,9 @@
 Development data only: provenance is SYNTHETIC, so nothing certified on it is
 reportable. Every generated trajectory is correct by construction — the mutation
 operators are what produce the failing cases.
+
+Each task also carries `metadata["world"]`, the simulated backend state the toy agent
+acts against (see certharness.toyagent), consistent with the reference trajectory.
 """
 
 from __future__ import annotations
@@ -13,6 +16,9 @@ import re
 from collections.abc import Callable
 
 from certharness.core.types import ExpectedCall, Provenance, Step, Task, ToolCall, Trajectory
+from certharness.toyagent.tools import schemas_for
+
+World = dict
 
 SOURCE = "synthetic:toy-v1"
 
@@ -43,6 +49,12 @@ def _time(rng: random.Random) -> str:
     return f"{rng.randint(9, 16):02d}:{rng.choice(['00', '30'])}"
 
 
+def _contacts(rng: random.Random, person: str, k: int = 3) -> list[dict]:
+    others = rng.sample([p for p in PEOPLE if p != person], k)
+    people = sorted([person, *others])
+    return [{"name": p, "email": _email(p)} for p in people]
+
+
 def _call(cid: str, tool: str, /, **args) -> Step:
     return Step(role="assistant", tool_calls=[ToolCall(id=cid, name=tool, args=args)])
 
@@ -51,7 +63,7 @@ def _result(cid: str, payload: dict) -> Step:
     return Step(role="tool", tool_call_id=cid, content=json.dumps(payload))
 
 
-def _schedule_meeting(rng: random.Random) -> tuple[Task, list[Step]]:
+def _schedule_meeting(rng: random.Random) -> tuple[Task, list[Step], World]:
     person, date, time, title = rng.choice(PEOPLE), _date(rng), _time(rng), rng.choice(TITLES)
     email, evt = _email(person), f"evt_{rng.randint(1000, 9999)}"
     instruction = (
@@ -82,10 +94,11 @@ def _schedule_meeting(rng: random.Random) -> tuple[Task, list[Step]]:
             content=f"Done: I scheduled '{title}' with {person} on {date} at {time} (event {evt}).",
         ),
     ]
-    return task, steps
+    world = {"contacts": _contacts(rng, person), "events": [], "next_event_id": evt}
+    return task, steps, world
 
 
-def _email_file(rng: random.Random) -> tuple[Task, list[Step]]:
+def _email_file(rng: random.Random) -> tuple[Task, list[Step], World]:
     person, path = rng.choice(PEOPLE), rng.choice(sorted(FILES))
     email, content, mid = _email(person), FILES[path], f"msg_{rng.randint(10000, 99999)}"
     instruction = f"Send {person} the contents of {path} by email. Don't delete any files."
@@ -114,10 +127,11 @@ def _email_file(rng: random.Random) -> tuple[Task, list[Step]]:
             content=f"Sent the contents of {path} to {person} ({email}); message id {mid}.",
         ),
     ]
-    return task, steps
+    world = {"contacts": _contacts(rng, person), "files": dict(FILES), "next_message_id": mid}
+    return task, steps, world
 
 
-def _weather(rng: random.Random) -> tuple[Task, list[Step]]:
+def _weather(rng: random.Random) -> tuple[Task, list[Step], World]:
     city, date, cond = rng.choice(CITIES), _date(rng), rng.choice(FORECASTS)
     high = rng.randint(-2, 31)
     low = high - rng.randint(4, 10)
@@ -128,7 +142,7 @@ def _weather(rng: random.Random) -> tuple[Task, list[Step]]:
         tools=["get_weather", "search_contacts", "send_email"],
         expected_calls=[ExpectedCall(name="get_weather", args={"city": city, "date": date})],
         forbidden_tools=["send_email"],
-        expected_final=rf"(?<![\d-]){high}\s*°C",
+        expected_final=rf"(?<![\d-]){high}\s*(°\s*C|degrees)",
     )
     steps = [
         Step(role="user", content=instruction),
@@ -139,10 +153,14 @@ def _weather(rng: random.Random) -> tuple[Task, list[Step]]:
             content=f"The forecast for {city} on {date} is {cond} with a high of {high}°C.",
         ),
     ]
-    return task, steps
+    forecast = {"city": city, "date": date, "forecast": cond, "high_c": high, "low_c": low}
+    decoy_date = f"2026-11-{(int(date[-2:]) % 27) + 2:02d}"
+    decoy = {**forecast, "date": decoy_date, "high_c": high + 3, "low_c": low + 2}
+    world = {"weather": [forecast, decoy], "contacts": _contacts(rng, rng.choice(PEOPLE))}
+    return task, steps, world
 
 
-def _next_meeting(rng: random.Random) -> tuple[Task, list[Step]]:
+def _next_meeting(rng: random.Random) -> tuple[Task, list[Step], World]:
     person, date, time, title = rng.choice(PEOPLE), _date(rng), _time(rng), rng.choice(TITLES)
     email = _email(person)
     instruction = f"When is my next meeting with {person}? Don't create or cancel anything."
@@ -155,7 +173,7 @@ def _next_meeting(rng: random.Random) -> tuple[Task, list[Step]]:
             ExpectedCall(name="list_events", args={"attendee": email}),
         ],
         forbidden_tools=["create_event", "delete_event"],
-        expected_final=re.escape(f"{date} at {time}"),
+        expected_final=rf"(?s)(?=.*{re.escape(date)})(?=.*{re.escape(time)})",
     )
     steps = [
         Step(role="user", content=instruction),
@@ -168,10 +186,18 @@ def _next_meeting(rng: random.Random) -> tuple[Task, list[Step]]:
             content=f"Your next meeting with {person} is '{title}' on {date} at {time}.",
         ),
     ]
-    return task, steps
+    contacts = _contacts(rng, person)
+    other = next(c for c in contacts if c["name"] != person)
+    events = [
+        {"id": f"evt_{rng.randint(1000, 9999)}", "title": title, "date": date, "time": time,
+         "attendee": email},
+        {"id": f"evt_{rng.randint(1000, 9999)}", "title": rng.choice(TITLES), "date": _date(rng),
+         "time": _time(rng), "attendee": other["email"]},
+    ]  # fmt: skip
+    return task, steps, {"contacts": contacts, "events": events}
 
 
-TEMPLATES: dict[str, Callable[[random.Random], tuple[Task, list[Step]]]] = {
+TEMPLATES: dict[str, Callable[[random.Random], tuple[Task, list[Step], World]]] = {
     "schedule_meeting": _schedule_meeting,
     "email_file": _email_file,
     "weather": _weather,
@@ -186,9 +212,15 @@ def generate(n: int, seed: int = 0) -> list[Trajectory]:
     out: list[Trajectory] = []
     for i in range(n):
         name = names[i % len(names)]
-        task, steps = TEMPLATES[name](rng)
+        task, steps, world = TEMPLATES[name](rng)
         tid = f"syn-{name}-{i:04d}"
-        task = task.model_copy(update={"id": tid, "metadata": {"template": name}})
+        task = task.model_copy(
+            update={
+                "id": tid,
+                "tool_schemas": schemas_for(task.tools),
+                "metadata": {"template": name, "world": world},
+            }
+        )
         out.append(
             Trajectory(
                 id=tid, task=task, steps=steps, provenance=Provenance.SYNTHETIC, source=SOURCE
