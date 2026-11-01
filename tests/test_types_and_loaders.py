@@ -23,7 +23,11 @@ def test_final_answer_and_tool_calls(originals):
 
 def test_blinded_strips_mutation(originals):
     t = originals[0].model_copy(
-        update={"mutation": Mutation(operator="x", severity="major", parent_id="p", seed=1)}
+        update={
+            "mutation": Mutation(
+                operator="x", severity="major", tier="subtle", parent_id="p", seed=1
+            )
+        }
     )
     assert t.blinded().mutation is None
     assert t.mutation is not None

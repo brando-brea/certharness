@@ -69,6 +69,7 @@ class Mutation(BaseModel):
 
     operator: str
     severity: Literal["critical", "major"]
+    tier: Literal["obvious", "subtle"]
     parent_id: str
     seed: int
     step_index: int | None = None

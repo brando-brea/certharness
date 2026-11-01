@@ -76,6 +76,19 @@ benchmark's native format into `Trajectory` objects with `provenance="external"`
 - **Single rater:** labels come from one person. Intra-rater agreement across two
   blind sessions is reported as a limitation.
 - **Toy domain:** the development domain is small. v0.2 adds an external benchmark.
+- **Point estimates overstate small samples (a preview of RQ3).** "0 misses out of 50"
+  doesn't show a miss rate under 2%. So the critical-false-pass gate uses the one-sided
+  95% Clopper–Pearson *upper bound*, which must be ≤ 2%. That bound is out of reach
+  below **149 critical mutants even with zero misses** (the rule of three: 3/0.02 ≈ 150).
+  One miss needs 236, two need 313. `certify` prints the required n and marks the gate
+  unachievable below it, so suite size becomes a design decision instead of an
+  afterthought. A second, hard gate requires **zero misses on *obvious* critical
+  mutants** (faults visible in a single step, such as calling a forbidden tool, or
+  claiming success right after a tool error). Below 236 critical mutants that gate is
+  redundant, because one miss of any kind already breaks the bound. Above 236 it's
+  what stops a grader from "spending" its allowed miss on a blatant fault. One caveat:
+  the bound assumes independent trials, but mutants that share a parent trajectory are
+  correlated, so the true uncertainty is somewhat larger than reported.
 
 ## Independence
 

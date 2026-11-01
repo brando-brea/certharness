@@ -47,6 +47,7 @@ def mutate_all(
                         "mutation": Mutation(
                             operator=op.name,
                             severity=op.severity,
+                            tier=op.tier,
                             parent_id=parent.id,
                             seed=op_seed,
                             step_index=applied.step_index,

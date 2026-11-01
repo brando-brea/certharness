@@ -24,7 +24,7 @@ NOT_REPORTABLE = (
 @app.command()
 def synth(
     out: Annotated[Path, typer.Option(help="Output JSONL of passing trajectories.")],
-    n: Annotated[int, typer.Option(min=1)] = 48,
+    n: Annotated[int, typer.Option(min=1)] = 64,
     seed: int = 0,
 ) -> None:
     """Generate synthetic passing trajectories (development data, never reportable)."""
@@ -97,7 +97,7 @@ def list_cmd() -> None:
     typer.echo("loaders:   " + ", ".join(available_loaders()))
     typer.echo("operators:")
     for op in OPERATORS.values():
-        typer.echo(f"  {op.name:<20} {op.severity:<9} {op.description}")
+        typer.echo(f"  {op.name:<20} {op.severity:<9} {op.tier:<8} {op.description}")
 
 
 def _fmt(x: float | None) -> str:
@@ -113,8 +113,11 @@ def _print_report(r: CertificationReport) -> None:
         f"false_alarm={_fmt(v.false_alarm_rate)} false_pass={_fmt(v.false_pass_rate)}"
     )
     typer.echo(
-        f"  adequacy (n={r.n_mutants}): mutation_score={_fmt(r.mutation_score)} "
-        f"critical_false_pass={_fmt(r.critical_false_pass_rate)} (n_critical={r.n_critical})"
+        f"  adequacy (n={r.n_mutants}): mutation_score={_fmt(r.mutation_score)}; "
+        f"critical missed {r.critical_misses}/{r.n_critical} "
+        f"(point={_fmt(r.critical_false_pass_rate)}, CP upper={_fmt(r.critical_fp_upper)}, "
+        f"n required at 0 misses={r.critical_n_required}); "
+        f"obvious missed {r.obvious_critical_misses}/{r.n_obvious_critical}"
     )
     for g in r.gates:
         mark = {True: "pass", False: "FAIL", None: "n/a "}[g.passed]
@@ -133,7 +136,7 @@ def _print_matrix(reports: list[CertificationReport]) -> None:
     typer.echo(f"  {'operator':<20}{'sev':<10}" + "".join(f"{r.grader:>{width}}" for r in reports))
     for op in ops:
         stats = [{s.operator: s for s in r.operators}.get(op) for r in reports]
-        sev = next(s.severity for s in stats if s)
+        sev = next(f"{s.severity[:4]}/{s.tier[:3]}" for s in stats if s)
         cells = "".join(f"{(f'{s.catch_rate:.2f} ({s.n})' if s else '-'):>{width}}" for s in stats)
         typer.echo(f"  {op:<20}{sev:<10}{cells}")
 

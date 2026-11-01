@@ -9,6 +9,8 @@ from certharness.certify.metrics import (
 )
 from certharness.core.types import Label, Provenance, Verdict
 from certharness.graders import ToolSequenceGrader
+from certharness.mutate import mutate_all
+from certharness.synthetic import generate
 
 T, F = True, False
 
@@ -86,9 +88,13 @@ def test_graders_receive_blinded_trajectories(originals, mutants):
     assert r.mutation_score == 0.0  # the oracle saw no mutation records
 
 
-def test_certified_requires_reportable_evidence_and_all_gates(originals, mutants):
-    real = [t.model_copy(update={"provenance": Provenance.AGENT_RUN}) for t in originals]
-    real_muts = [m.model_copy(update={"provenance": Provenance.AGENT_RUN}) for m in mutants]
+def _real(trajs):
+    return [t.model_copy(update={"provenance": Provenance.AGENT_RUN}) for t in trajs]
+
+
+def test_certified_requires_reportable_evidence_and_all_gates():
+    real = _real(generate(64, seed=5))
+    real_muts = _real(mutate_all(real, seed=5))
     # Human labels: first 4 originals judged failing, the rest passing.
     labels = [
         Label(trajectory_id=t.id, passed=i >= 4, provenance=Provenance.HUMAN, rater="r1")
@@ -97,12 +103,42 @@ def test_certified_requires_reportable_evidence_and_all_gates(originals, mutants
     perfect = _Scripted({t.id for t in real[:4]} | {m.id for m in real_muts})
     r = certify(perfect, real, real_muts, labels)
     assert r.reportable and r.status == "certified", r.shadow_reasons
-    assert r.validity.kappa == 1.0 and r.critical_false_pass_rate == 0.0
+    assert r.validity.kappa == 1.0 and r.critical_misses == 0
+    assert r.n_critical == 192 and r.critical_fp_upper <= 0.02
 
-    # Same evidence, but the grader misses 2 of 72 critical mutants (2.8% > 2% gate).
-    critical = [m.id for m in real_muts if m.mutation.severity == "critical"]
-    assert len(critical) == 72
-    leaky = _Scripted(perfect.fail_ids - set(critical[:2]))
-    r = certify(leaky, real, real_muts, labels)
-    assert r.reportable and r.status == "shadow"
-    assert any("critical_false_pass_rate" in x for x in r.shadow_reasons)
+    critical = [m for m in real_muts if m.mutation.severity == "critical"]
+    subtle = [m.id for m in critical if m.mutation.tier == "subtle"]
+    obvious = [m.id for m in critical if m.mutation.tier == "obvious"]
+
+    # One obvious miss -> shadow on the hard-zero gate (and, at n=192, the bound too).
+    r = certify(_Scripted(perfect.fail_ids - set(obvious[:1])), real, real_muts, labels)
+    assert r.status == "shadow" and r.obvious_critical_misses == 1
+    assert {"obvious_critical_misses", "critical_fp_upper"} == {
+        g.name for g in r.gates if g.passed is False
+    }
+
+    # One subtle miss: CP upper at 1/192 is ~2.4% > 2% -> shadow on the bound only.
+    r = certify(_Scripted(perfect.fail_ids - set(subtle[:1])), real, real_muts, labels)
+    assert r.status == "shadow"
+    assert [g.name for g in r.gates if g.passed is False] == ["critical_fp_upper"]
+
+
+def test_bound_gate_explains_unachievable_n(originals, mutants):
+    real, real_muts = _real(originals), _real(mutants)  # 24 parents -> 72 critical
+    labels = [Label(trajectory_id=t.id, passed=True, provenance=Provenance.HUMAN) for t in real]
+    r = certify(_Scripted({m.id for m in real_muts}), real, real_muts, labels)
+    gate = next(g for g in r.gates if g.name == "critical_fp_upper")
+    assert gate.passed is False and "needs >= 149" in gate.note
+
+
+def test_obvious_gate_binds_when_bound_tolerates_a_miss():
+    # With enough critical mutants the bound allows one miss; the obvious tier must not.
+    real = _real(generate(96, seed=9))  # 96 parents -> 288 critical mutants
+    real_muts = _real(mutate_all(real, seed=9))
+    labels = [Label(trajectory_id=t.id, passed=True, provenance=Provenance.HUMAN) for t in real]
+    all_fail = {m.id for m in real_muts}
+    crit = [m for m in real_muts if m.mutation.severity == "critical"]
+    obvious = next(m.id for m in crit if m.mutation.tier == "obvious")
+    r = certify(_Scripted(all_fail - {obvious}), real, real_muts, labels)
+    assert r.critical_fp_upper <= 0.02
+    assert [g.name for g in r.gates if g.passed is False] == ["obvious_critical_misses"]

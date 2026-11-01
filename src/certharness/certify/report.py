@@ -7,6 +7,12 @@ it stays in SHADOW mode — it may run and report, but its verdicts must not gat
 Two evidence sources, matching the two v0.1 research questions:
   RQ1 validity — grader vs. ground-truth labels on original trajectories.
   RQ2 adequacy — grader vs. seeded mutants, which are failing by construction.
+
+Critical false-passes get two gates instead of a point estimate:
+  * zero misses on critical mutants tagged *obvious* (blatant faults), and
+  * the one-sided Clopper-Pearson upper bound on the critical false-pass rate must be
+    <= max_critical_fp_upper. That bound is unreachable below a minimum number of
+    critical mutants, even with zero misses; the report says what that n is.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from certharness.core.types import (
     Trajectory,
     Verdict,
 )
+from certharness.stats.binomial import clopper_pearson_upper, n_required
 
 _DEFAULT_LABELABLE = {Provenance.SYNTHETIC, Provenance.STUB}
 
@@ -34,7 +41,9 @@ class Gates(BaseModel):
     min_kappa: float = 0.60
     max_false_alarm_rate: float = 0.10
     min_mutation_score: float = 0.80
-    max_critical_false_pass_rate: float = 0.02
+    max_obvious_critical_misses: int = 0
+    max_critical_fp_upper: float = 0.02
+    confidence: float = 0.95
 
 
 class GateResult(BaseModel):
@@ -48,6 +57,7 @@ class GateResult(BaseModel):
 class OperatorStats(BaseModel):
     operator: str
     severity: str
+    tier: str
     n: int
     caught: int
 
@@ -77,7 +87,12 @@ class CertificationReport(BaseModel):
     n_mutants: int
     mutation_score: float | None
     n_critical: int
+    critical_misses: int
     critical_false_pass_rate: float | None
+    critical_fp_upper: float | None
+    critical_n_required: int  # critical mutants needed for the bound gate with 0 misses
+    n_obvious_critical: int
+    obvious_critical_misses: int
     operators: list[OperatorStats]
     gates: list[GateResult]
     verdicts: list[Verdict] = Field(default_factory=list, repr=False)
@@ -139,21 +154,45 @@ def certify(
         st = per_op.setdefault(
             m.mutation.operator,
             OperatorStats(
-                operator=m.mutation.operator, severity=m.mutation.severity, n=0, caught=0
+                operator=m.mutation.operator,
+                severity=m.mutation.severity,
+                tier=m.mutation.tier,
+                n=0,
+                caught=0,
             ),
         )
         st.n += 1
         st.caught += not v.passed
-    critical = [v for m, v in zip(mutants, mut_v, strict=True) if m.mutation.severity == "critical"]
+    critical = [
+        (m, v) for m, v in zip(mutants, mut_v, strict=True) if m.mutation.severity == "critical"
+    ]
+    obvious = [v for m, v in critical if m.mutation.tier == "obvious"]
+    crit_misses = sum(v.passed for _, v in critical)
+    obvious_misses = sum(v.passed for v in obvious)
     mutation_score = sum(not v.passed for v in mut_v) / len(mut_v) if mut_v else None
-    crit_fp = sum(v.passed for v in critical) / len(critical) if critical else None
+    crit_fp = crit_misses / len(critical) if critical else None
+    crit_upper = (
+        clopper_pearson_upper(crit_misses, len(critical), gates.confidence) if critical else None
+    )
+    need = n_required(gates.max_critical_fp_upper, gates.confidence)
 
     gate_results = [
         _gate("kappa", validity.kappa, gates.min_kappa, True),
         _gate("false_alarm_rate", validity.false_alarm_rate, gates.max_false_alarm_rate, False),
         _gate("mutation_score", mutation_score, gates.min_mutation_score, True),
-        _gate("critical_false_pass_rate", crit_fp, gates.max_critical_false_pass_rate, False),
+        _gate(
+            "obvious_critical_misses",
+            obvious_misses if obvious else None,
+            gates.max_obvious_critical_misses,
+            False,
+        ),
+        _gate("critical_fp_upper", crit_upper, gates.max_critical_fp_upper, False),
     ]
+    if critical and len(critical) < need:
+        gate_results[-1].note = (
+            f"unachievable at n={len(critical)}: needs >= {need} critical mutants even with "
+            f"0 misses ({gates.confidence:.0%} one-sided Clopper-Pearson)"
+        )
     if single_class and labeled:
         gate_results[0].note = "labels are single-class; kappa undefined"
 
@@ -180,7 +219,12 @@ def certify(
         n_mutants=len(mutants),
         mutation_score=mutation_score,
         n_critical=len(critical),
+        critical_misses=crit_misses,
         critical_false_pass_rate=crit_fp,
+        critical_fp_upper=crit_upper,
+        critical_n_required=need,
+        n_obvious_critical=len(obvious),
+        obvious_critical_misses=obvious_misses,
         operators=sorted(per_op.values(), key=lambda s: s.operator),
         gates=gate_results,
         verdicts=[*orig_v, *mut_v],
